@@ -1,104 +1,18 @@
-# Teuthology AI Log Analyzer
+# CephSight — AI-Powered Teuthology CI Failure Analyzer
 
-AI-powered tool for analyzing failed Ceph/Teuthology CI jobs. Fetches logs, clusters failures by error signature, analyzes root causes with a local Ollama LLM, and produces an interactive HTML report.
+Automated tool that analyzes failed Ceph Teuthology CI jobs using a local LLM and generates an interactive HTML report with root cause, severity, failure type, and fix suggestions.
 
-## Architecture
+## Model
+
+- **LLM**: `llama3:8b` via [Ollama](https://ollama.com/) (self-hosted, free, no data leaves infra)
+- **Why**: Fits in ~5 GB VRAM, fast inference (~15s/job), and the tool's heuristic layer compensates for the small model's limitations
+- **Alternatives**: Pass `--model llama3.1:70b` or `--model mistral` if you have a larger GPU
+
+## Pipeline
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                         main.py (CLI)                            │
-└──────────────────────────────────────────────────────────────────┘
-                              │
-      ┌───────────────────────┼───────────────────────┐
-      ▼                       ▼                       ▼
-┌─────────────┐      ┌──────────────┐        ┌──────────────────┐
-│  fetcher    │      │  log_parser  │        │     cluster      │
-│             │      │              │        │                  │
-│ • Pulpito   │─────▶│ • Tracebacks │───────▶│ • Fingerprint    │
-│ • qa-proxy  │      │ • Errors     │        │ • Fuzzy merge    │
-│ • Parallel  │      │ • Summary    │        │ • Run health     │
-│ • Thread-   │      │ • Condense   │        │ • Representative │
-│   safe DL   │      └──────────────┘        └────────┬─────────┘
-└─────────────┘               │                       │
-                              ▼                       ▼
-                     ┌──────────────────┐    ┌──────────────────┐
-                     │    analyzer      │    │ report_generator  │
-                     │                  │    │                  │
-                     │ • Ollama LLM     │───▶│ • HTML report    │
-                     │ • Two-pass       │    │ • Search/filter  │
-                     │   analysis       │    │ • JSON/CSV export│
-                     │ • Pattern match  │    │ • Light/dark mode│
-                     │ • Cache + TTL    │    └──────────────────┘
-                     │ • Heuristics     │
-                     └──────────────────┘
-```
-
-## Quick Start
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Ensure Ollama is running with a model pulled
-ollama pull llama3:8b
-ollama serve
-
-# Analyze a Pulpito run
-python3 main.py "https://pulpito.ceph.com/your-run-trial/" -o output
-
-# Use a different model
-python3 main.py URL --model mistral -o output
-
-# Use a larger context window for more log visibility
-python3 main.py URL --model llama3.1:70b --num-ctx 32768 -o output
-
-# Skip fetching, reuse previously downloaded logs
-python3 main.py URL --skip-fetch --logs-dir output/logs -o output
-```
-
-## Features
-
-- **Multi-source log fetching** — Fetches `teuthology.log` (with `ansible.log` fallback) from qa-proxy with parallel, thread-safe downloads
-- **Smart log parsing** — Extracts tracebacks, error blocks, and summary sections; condenses to ~24K chars for maximum LLM signal
-- **Failure clustering** — Groups jobs by error fingerprint with fuzzy similarity merging (Jaccard); one LLM call per cluster
-- **Run health classification** — Mass failure / partial / isolated based on actual pass/fail ratio from the run page
-- **Two-pass analysis** — Low-confidence results automatically get a deeper second analysis pass
-- **Concrete pattern validation** — Post-LLM regex-based cross-checks correct misclassifications using known Ceph error signatures
-- **Deep Ceph domain knowledge** — System prompt includes OSD crashes, MON elections, BlueStore errors, RGW failures, and more
-- **Model-aware caching** — Cache keys include model name + prompt version; 7-day TTL; executive summary caching
-- **Interactive HTML report** — Search, filter by severity/type, sort, JSON/CSV export, light/dark mode toggle
-- **Memory efficient** — Lazy raw log loading from disk after initial parse
-
-## CLI Options
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--model` | `llama3:8b` | Ollama model name |
-| `--ollama-url` | `localhost:11434` | Ollama API URL |
-| `--timeout` | `60` | HTTP timeout for log fetching (seconds) |
-| `--llm-timeout` | `300` | LLM request timeout (seconds) |
-| `--num-ctx` | `0` (auto) | Override model context window size |
-| `--skip-fetch` | — | Load logs from disk instead of fetching |
-| `--jobs` | all | Comma-separated job IDs to analyze |
-| `--no-cache` | — | Disable analysis caching |
-| `--clear-cache` | — | Wipe cache before running |
-| `--no-parallel` | — | Disable parallel fetching and analysis |
-| `--verbose` | — | Verbose output |
-
-## Running Tests
-
-```bash
-pip install pytest
-pytest tests/ -v
-```
-
-## Docker
-
-```bash
-docker build -t teuth-analyzer .
-docker run --rm -v $(pwd)/output:/app/output teuth-analyzer \
-    "https://pulpito.ceph.com/your-run/" -o output \
-    --ollama-url http://host.docker.internal:11434
+Pulpito URL → Fetch Logs → Parse & Extract → Cluster Failures → LLM Analysis → HTML Report
+(fetcher.py)   (log_parser.py)  (cluster.py)    (analyzer.py)   (report_generator.py)
 ```
 
 ## Project Structure
@@ -106,9 +20,70 @@ docker run --rm -v $(pwd)/output:/app/output teuth-analyzer \
 | File | Purpose |
 |------|---------|
 | `main.py` | CLI entry point, pipeline orchestration |
-| `fetcher.py` | Log fetching from Pulpito/qa-proxy |
-| `log_parser.py` | Log preprocessing and error extraction |
-| `cluster.py` | Failure clustering and run health |
-| `analyzer.py` | Ollama LLM analysis with two-pass accuracy |
-| `report_generator.py` | Interactive HTML report generation |
-| `tests/` | Unit tests for parser, cluster, analyzer |
+| `fetcher.py` | Log fetching from Pulpito/qa-proxy (parallel) |
+| `log_parser.py` | Extract tracebacks, errors, summary; condense to ≤12K chars |
+| `cluster.py` | Group similar failures by error fingerprint + run health |
+| `analyzer.py` | Ollama LLM analysis + 18 regex heuristic cross-checks + cache |
+| `report_generator.py` | Self-contained interactive HTML report |
+
+## How to Run (IBM Cloud VM)
+
+The analysis runs on an IBM Cloud VM where Ollama + GPU are available.
+
+### 1. Copy files to the VM
+
+```bash
+scp -i ~/Downloads/ibmcloud_generated.rsa \
+    *.py requirements.txt \
+    root@128.168.142.78:/root/AI_teutology/
+```
+
+### 2. SSH into the VM
+
+```bash
+ssh -i ~/Downloads/ibmcloud_generated.rsa root@128.168.142.78
+```
+
+### 3. Run the analysis
+
+```bash
+cd /root/AI_teutology
+pip install -r requirements.txt
+python3 main.py "https://pulpito.ceph.com/<your-run-url>/" -o output
+```
+
+### 4. Exit the VM
+
+```bash
+exit
+```
+
+### 5. Copy the report back locally
+
+```bash
+scp -i ~/Downloads/ibmcloud_generated.rsa \
+    root@128.168.142.78:/root/AI_teutology/output/report.html \
+    ~/AI_teutology_report.html
+```
+
+### 6. Open the report
+
+```bash
+xdg-open ~/AI_teutology_report.html
+```
+
+## CLI Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model` | `llama3:8b` | Ollama model name |
+| `--ollama-url` | `localhost:11434` | Ollama API URL |
+| `--timeout` | `60` | Log fetch timeout (seconds) |
+| `--llm-timeout` | `300` | LLM request timeout (seconds) |
+| `--num-ctx` | `0` (auto) | Override model context window size |
+| `--skip-fetch` | — | Load logs from disk instead of fetching |
+| `--jobs` | all | Comma-separated job IDs to analyze |
+| `--no-cache` | — | Disable analysis caching |
+| `--clear-cache` | — | Wipe cache before running |
+| `--no-parallel` | — | Disable parallel fetching/analysis |
+| `--verbose` | — | Verbose output |
