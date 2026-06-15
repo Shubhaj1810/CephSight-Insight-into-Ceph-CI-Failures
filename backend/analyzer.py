@@ -3,7 +3,7 @@
 AI log analyzer using Ollama.
 
 Sends condensed log excerpts to a local Ollama instance and returns
-structured analysis results.  Optimized for llama3:8b's context window
+structured analysis results.  Optimized for qwen3.5's context window
 and instruction-following capability.
 """
 from __future__ import annotations
@@ -46,32 +46,60 @@ class AnalysisResult:
 
 
 # ---------------------------------------------------------------------------
-# Prompts — compact for llama3:8b (fits in ~800 tokens)
+# ---------------------------------------------------------------------------
+# Prompts — signal-aware for comprehensive error detection
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT = """\
-You are a Ceph/Teuthology CI failure analyst. Given a failed test log, \
-return ONLY valid JSON (no markdown, no commentary) with these fields:
+You are a Ceph/Teuthology CI failure analyst.
+
+CRITICAL RULES:
+1. ONLY use information EXPLICITLY PRESENT in the provided log text.
+2. NEVER invent or hallucinate errors not in the log.
+3. Your root_cause MUST quote or closely paraphrase an actual error line from the log.
+4. If the log has no clear failure, say so and set confidence to 0.3.
+
+HOW TO READ THE LOG (priority order):
+1. "FAILURE REASON" section — the official teuthology failure reason. Start here.
+2. "COMMAND STDERR" section — actual error output from failed commands. This explains WHY the command failed (e.g. "not valid", "EINVAL", "Permission denied").
+3. "FAILURE CONTEXT" section — lines before the failure showing what happened.
+4. "TRACEBACKS" section — Python stack traces showing where it failed.
+5. "OTHER FAILURE SIGNALS" — timeout, health, connection issues.
+6. "ERROR BLOCKS" — generic error lines with context.
+
+IMPORTANT: The stderr output (section 2) usually contains the REAL error message. \
+The CommandFailedError only tells you THAT a command failed, but the stderr tells you WHY. \
+Always prefer stderr content for root_cause over the generic CommandFailedError line.
+
+Return ONLY valid JSON (no markdown, no commentary):
 
 {
-  "root_cause": "<one-line summary citing the specific error>",
+  "root_cause": "<quote the actual error from stderr or failure_reason>",
   "severity": "<critical|high|medium|low>",
-  "error_category": "<e.g. package install failure, boto import error, SSH failure>",
+  "error_category": "<describe based on what you SEE>",
   "failure_type": "<network|crash|timeout|config|test_bug|infra|permission|resource|unknown>",
   "confidence": <0.0-1.0>,
-  "explanation": "<2-3 sentences explaining what failed and why>",
+  "explanation": "<2-3 sentences referencing specific lines/stderr from the log>",
   "fix_suggestions": ["<fix 1>", "<fix 2>"],
-  "recommended_action": "<most important fix>",
-  "affected_components": ["<component>"]
+  "recommended_action": "<most important fix based on actual error>",
+  "affected_components": ["<component from the log>"]
 }
 
-severity: critical=data loss/cluster crash, high=product bug, medium=flaky/infra, low=cosmetic.
-failure_type meanings: network=connectivity, crash=segfault/assert, timeout=hung op, \
-config=bad config, test_bug=test logic, infra=provisioning/packages/artifacts, \
-permission=auth/caps, resource=OOM/disk full.
+severity: critical=data loss/cluster crash, high=product/test bug, medium=flaky/infra, low=cosmetic.
+failure_type: network=connectivity, crash=segfault/assert, timeout=hung op, \
+config=bad config/invalid args, test_bug=test logic/invalid test params, \
+infra=provisioning/packages/artifacts, permission=auth/caps, resource=OOM/disk full.
 Return ONLY the JSON object."""
 
 USER_PROMPT_TEMPLATE = """\
-Analyze this failed teuthology job {job_id}. Return JSON only.
+Analyze this failed teuthology job {job_id}.
+
+INSTRUCTIONS:
+- Look at FAILURE REASON and COMMAND STDERR sections first — they have the actual error.
+- The stderr output explains WHY the command failed (not just THAT it failed).
+- Quote the actual error message in root_cause.
+- Do NOT hallucinate errors not present in the text below.
+
+Return JSON only.
 
 {condensed_text}"""
 
@@ -79,6 +107,8 @@ RETRY_PROMPT = """\
 Your response was not valid JSON. Return ONLY a JSON object with these keys: \
 root_cause, severity, error_category, failure_type, confidence, explanation, \
 fix_suggestions, recommended_action, affected_components.
+
+Look at the COMMAND STDERR and FAILURE REASON sections for the actual error.
 
 Job {job_id} log:
 {condensed_text}"""
@@ -89,6 +119,12 @@ Cluster signature: {signature}
 Job IDs: {job_ids}
 Representative job: {job_id}
 {run_health_hint}
+
+INSTRUCTIONS:
+- Look at FAILURE REASON and COMMAND STDERR sections first.
+- The stderr explains WHY the command failed.
+- Quote the actual error in root_cause. Do NOT invent errors.
+- Return JSON only.
 
 {condensed_text}"""
 
@@ -156,7 +192,15 @@ def _infer_failure_type(text: str) -> str:
     """Rule-based failure type inference with Teuthology-specific patterns."""
     t = text.lower()
 
-    # Teuthology-specific patterns (check first — most precise)
+    # Stderr-based patterns (highest precision — from actual command output)
+    if "not valid:" in t or "invalid command" in t or "unused arguments" in t:
+        return "test_bug"
+    if "error einval" in t:
+        return "test_bug"
+    if "not in raw|lvm" in t or "--objectstore not valid" in t:
+        return "test_bug"
+
+    # Teuthology-specific patterns
     if "no module named" in t:
         return "config"
     if re.search(r"command failed on \S+ with status \d+.*sudo (yum|dnf|apt).*install", t):
@@ -221,33 +265,73 @@ def _infer_failure_type(text: str) -> str:
 
 
 def _extract_teuthology_failure_reason(text: str) -> Optional[str]:
-    """Extract the Teuthology 'Failure Reason' or 'Command failed' line."""
+    """Extract the actual failure reason from the log.
+
+    Priority: stderr error messages > failure_reason line > CommandFailed.
+    The stderr content tells WHY a command failed, which is more useful
+    than just knowing that it failed.
+    """
+    stderr_error = None
+    failure_reason_line = None
+    command_failed_line = None
+
     for line in text.splitlines():
         stripped = line.strip()
-        # Teuthology failure reason from summary
+
+        # Stderr error messages (highest priority — the actual error)
+        if "stderr" in stripped.lower() or stripped.startswith("  "):
+            for pattern in [
+                r"(not valid:.*)",
+                r"(Invalid command:.*)",
+                r"(Error [A-Z]+:.*)",
+                r"(EINVAL.*)",
+                r"(No such file or directory.*)",
+                r"(Permission denied.*)",
+                r"(Connection refused.*)",
+                r"(No space left on device.*)",
+                r"(Cannot allocate memory.*)",
+                r"(ModuleNotFoundError:.*)",
+                r"(ImportError:.*)",
+                r"(FileNotFoundError:.*)",
+            ]:
+                m = re.search(pattern, stripped, re.IGNORECASE)
+                if m and not stderr_error:
+                    stderr_error = m.group(1).strip()[:300]
+
+        # Teuthology failure_reason from YAML summary
         if stripped.lower().startswith("failure_reason:"):
-            return stripped[len("failure_reason:"):].strip()[:300]
-        # "Command failed ..." lines
+            failure_reason_line = stripped[len("failure_reason:"):].strip("' ")[:300]
+
+        # CommandFailed lines (lower priority)
         m = re.match(
-            r".*?(Command failed\s*\(.*?\).*?with status \d+.*)",
+            r".*?(Command failed\s*(?:\(.*?\))?\s*(?:on \w+\s*)?with status \d+.*)",
             stripped, re.IGNORECASE,
         )
-        if m:
-            return m.group(1)[:300]
-        # "No module named" standalone
+        if m and not command_failed_line:
+            command_failed_line = m.group(1)[:300]
+
+        # Direct error patterns
         m2 = re.search(r"(No module named '[^']+')", stripped)
         if m2:
             return m2.group(1)
-        # "Failed to fetch package version"
         if "failed to fetch package version" in stripped.lower():
             return stripped[:300]
-        # "Error reimaging"
         if "error reimaging" in stripped.lower():
             return stripped[:300]
         # "valgrind error"
         m3 = re.search(r"(valgrind error:.*)", stripped, re.IGNORECASE)
         if m3:
             return m3.group(1)[:300]
+
+    # Return best available reason (priority: stderr > failure_reason > command_failed)
+    if stderr_error:
+        if failure_reason_line:
+            return f"{stderr_error} ({failure_reason_line[:100]})"
+        return stderr_error
+    if failure_reason_line:
+        return failure_reason_line
+    if command_failed_line:
+        return command_failed_line
     return None
 
 
@@ -314,8 +398,36 @@ def _concrete_pattern_match(condensed_text: str) -> Optional[tuple[str, str]]:
     return None
 
 
+def _is_hallucinated(result: AnalysisResult, condensed_text: str) -> bool:
+    """Detect if the LLM hallucinated a root cause not grounded in the log."""
+    root = result.root_cause.lower()
+    log_lower = condensed_text.lower()
+
+    hallucination_signals = [
+        "boto3", "boto", "aws sdk", "s3 operation",
+        "read frame preamble", "state_connection_established",
+        "messenger v2", "protocol version incompatibility",
+    ]
+    for signal in hallucination_signals:
+        if signal in root and signal not in log_lower:
+            return True
+
+    key_phrases = re.findall(r"['\"]([^'\"]{5,})['\"]", result.root_cause)
+    for phrase in key_phrases:
+        if phrase.lower() not in log_lower:
+            return True
+
+    return False
+
+
 def _apply_heuristics(result: AnalysisResult, condensed_text: str) -> AnalysisResult:
     """Post-LLM validation and correction."""
+    if _is_hallucinated(result, condensed_text):
+        result.root_cause = ""
+        result.explanation = ""
+        result.confidence = 0.0
+        result.error_category = ""
+
     # Cross-validate against concrete patterns
     pattern_match = _concrete_pattern_match(condensed_text)
 
@@ -628,11 +740,11 @@ def _build_analysis_result(job_id: str, raw: str, condensed_text: str,
 # Ollama Analyzer
 # ---------------------------------------------------------------------------
 class OllamaAnalyzer:
-    """Ollama-based log analyzer optimized for llama3:8b."""
+    """Ollama-based log analyzer optimized for qwen3.5."""
 
     def __init__(
         self,
-        model: str = "llama3:8b",
+        model: str = "cephsight",
         base_url: str = "http://localhost:11434",
         timeout: int = 300,
         max_retries: int = 3,
@@ -654,18 +766,21 @@ class OllamaAnalyzer:
 
     def _generate(self, prompt: str, system: str = "",
                   force_json: bool = False) -> str:
-        url = f"{self.base_url}/api/generate"
+        url = f"{self.base_url}/api/chat"
         options: Dict[str, Any] = {
             "temperature": 0.1,
             "num_predict": 2048,
+            "num_ctx": self.num_ctx if self.num_ctx > 0 else 32768,
         }
-        if self.num_ctx > 0:
-            options["num_ctx"] = self.num_ctx
+
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
 
         payload: Dict[str, Any] = {
             "model": self.model,
-            "prompt": prompt,
-            "system": system,
+            "messages": messages,
             "stream": False,
             "options": options,
         }
@@ -678,7 +793,8 @@ class OllamaAnalyzer:
                 resp = requests.post(url, json=payload, timeout=self.timeout)
                 resp.raise_for_status()
                 data = resp.json()
-                return data.get("response", "")
+                msg = data.get("message", {})
+                return msg.get("content", "")
             except Exception as exc:
                 last_err = exc
                 wait = 2 ** attempt
@@ -714,7 +830,7 @@ class OllamaAnalyzer:
 
     def _try_json_with_retries(self, prompt: str, condensed_text: str,
                                 job_id: str) -> tuple[str, bool]:
-        # First attempt WITHOUT force_json — llama3:8b returns {} when
+        # First attempt WITHOUT force_json — some models return {} when
         # format=json is set.  Let it respond naturally, then extract JSON.
         try:
             raw = self._generate(prompt, system=SYSTEM_PROMPT, force_json=False)

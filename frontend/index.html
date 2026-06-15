@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CephSight — Teuthology CI Failure Analyzer</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --bg2: #161b22;
+  --bg3: #21262d;
+  --fg: #c9d1d9;
+  --fg2: #8b949e;
+  --accent: #58a6ff;
+  --accent-hover: #79bbff;
+  --border: #30363d;
+  --red: #f85149;
+  --orange: #d29922;
+  --yellow: #e3b341;
+  --green: #3fb950;
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  --radius: 8px;
+  --shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+html.light {
+  --bg: #ffffff;
+  --bg2: #f6f8fa;
+  --bg3: #eaeef2;
+  --fg: #1f2328;
+  --fg2: #656d76;
+  --accent: #0969da;
+  --accent-hover: #0550ae;
+  --border: #d0d7de;
+  --shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--fg);
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+/* Layout */
+.app { max-width: 1200px; margin: 0 auto; padding: 2rem 1.5rem; }
+
+/* Header */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.header h1 {
+  font-size: 1.6rem;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.header h1 .logo {
+  font-size: 1.8rem;
+}
+.header-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.btn {
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg2);
+  color: var(--fg);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn:hover { background: var(--bg3); }
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Input Section */
+.input-section {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+  box-shadow: var(--shadow);
+}
+.input-section h2 {
+  font-size: 1.1rem;
+  color: var(--fg);
+  margin-bottom: 1rem;
+}
+.input-group {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.input-group input[type="text"] {
+  flex: 1;
+  min-width: 300px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.95rem;
+  font-family: var(--mono);
+  outline: none;
+  transition: border-color 0.2s;
+}
+.input-group input:focus { border-color: var(--accent); }
+.input-group select {
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.9rem;
+}
+
+/* Progress Section */
+.progress-section {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+  box-shadow: var(--shadow);
+}
+.progress-bar-track {
+  height: 6px;
+  background: var(--bg3);
+  border-radius: 3px;
+  margin-top: 1rem;
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+  width: 0%;
+}
+.progress-bar-fill.indeterminate {
+  width: 30%;
+  animation: indeterminate 1.5s infinite ease-in-out;
+}
+@keyframes indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.progress-stage {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+.progress-detail {
+  font-size: 0.85rem;
+  color: var(--fg2);
+  margin-top: 0.25rem;
+}
+.error-message {
+  background: rgba(248, 81, 73, 0.1);
+  border: 1px solid rgba(248, 81, 73, 0.3);
+  border-radius: var(--radius);
+  padding: 1rem;
+  color: var(--red);
+  margin-top: 1rem;
+}
+
+/* Stats */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+.stat-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+.stat-card .value {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+.stat-card .label {
+  font-size: 0.8rem;
+  color: var(--fg2);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.stat-card.critical .value { color: var(--red); }
+.stat-card.high .value { color: var(--orange); }
+.stat-card.medium .value { color: var(--yellow); }
+.stat-card.low .value { color: var(--green); }
+
+/* Health Badge */
+.health-panel {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  margin-bottom: 2rem;
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  box-shadow: var(--shadow);
+}
+.health-badge {
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #fff;
+  white-space: nowrap;
+}
+.health-badge.mass_failure { background: var(--red); }
+.health-badge.partial_failure { background: var(--orange); }
+.health-badge.isolated { background: var(--green); }
+.health-ratio {
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+.health-detail {
+  font-size: 0.9rem;
+  color: var(--fg2);
+}
+
+/* Summary */
+.summary-box {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  margin-bottom: 2rem;
+  white-space: pre-wrap;
+  font-size: 0.92rem;
+  line-height: 1.7;
+  box-shadow: var(--shadow);
+}
+.summary-box h2 {
+  font-size: 1.1rem;
+  color: var(--accent);
+  margin-bottom: 0.75rem;
+}
+
+/* Cluster Table */
+.panel {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  margin-bottom: 2rem;
+  box-shadow: var(--shadow);
+}
+.panel h2 {
+  font-size: 1.1rem;
+  color: var(--accent);
+  margin-bottom: 0.75rem;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+th, td {
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+th {
+  color: var(--fg2);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+
+/* Filter Toolbar */
+.toolbar {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.toolbar input[type="text"] {
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.9rem;
+  min-width: 180px;
+  flex: 1;
+  outline: none;
+}
+.toolbar input:focus { border-color: var(--accent); }
+.toolbar select {
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.85rem;
+}
+.toolbar .count {
+  color: var(--fg2);
+  font-size: 0.85rem;
+}
+.toolbar .spacer { flex: 1; }
+
+/* Job Cards */
+.job-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 0.75rem;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+.job-card-header {
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  user-select: none;
+}
+.job-card-header:hover { background: var(--bg3); }
+.job-card-header .arrow {
+  font-size: 0.7rem;
+  color: var(--fg2);
+  transition: transform 0.2s;
+}
+.job-card.open .arrow { transform: rotate(90deg); }
+.severity-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.severity-badge.critical { background: var(--red); }
+.severity-badge.high { background: var(--orange); }
+.severity-badge.medium { background: var(--yellow); color: #1f2328; }
+.severity-badge.low { background: var(--green); }
+.job-card-title {
+  font-weight: 600;
+  flex: 1;
+}
+.job-card-meta {
+  display: flex;
+  gap: 0.75rem;
+  font-size: 0.8rem;
+  color: var(--fg2);
+}
+.job-card-body {
+  padding: 0 1rem 1rem;
+  display: none;
+}
+.job-card.open .job-card-body { display: block; }
+
+.field-label {
+  color: var(--fg2);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  margin-top: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+.tag {
+  display: inline-block;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  margin: 2px 4px 2px 0;
+}
+.highlight-box {
+  background: rgba(63, 185, 80, 0.08);
+  border-left: 3px solid var(--green);
+  padding: 0.5rem 0.75rem;
+  margin: 0.25rem 0;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.fix-list {
+  padding-left: 1.25rem;
+  margin-top: 0.25rem;
+}
+.fix-list li { margin-bottom: 0.3rem; font-size: 0.9rem; }
+pre.log-block {
+  background: #010409;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem;
+  overflow-x: auto;
+  max-height: 400px;
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--fg2);
+}
+html.light pre.log-block { background: #f0f0f0; }
+.error-block {
+  background: rgba(248, 81, 73, 0.08);
+  border-left: 3px solid var(--red);
+  padding: 0.25rem 0.5rem;
+  margin: 0.5rem 0;
+}
+
+.hidden { display: none !important; }
+
+footer {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  text-align: center;
+  color: var(--fg2);
+  font-size: 0.8rem;
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Header -->
+  <div class="header">
+    <h1><span class="logo">&#128269;</span> CephSight</h1>
+    <div class="header-actions">
+      <button class="btn" id="theme-toggle">Light Mode</button>
+    </div>
+  </div>
+
+  <!-- Input -->
+  <div class="input-section">
+    <h2>Analyze Teuthology CI Run</h2>
+    <div class="input-group">
+      <input type="text" id="url-input" placeholder="Paste Pulpito run URL... (e.g. https://pulpito.ceph.com/run-name-trial/)">
+      <select id="model-select">
+        <option value="cephsight" selected>cephsight (qwen3.5:14b 32k)</option>
+        <option value="qwen3.5:9b">qwen3.5:9b</option>
+        <option value="qwen3.5:14b">qwen3.5:14b</option>
+      </select>
+      <button class="btn btn-primary" id="analyze-btn">Analyze</button>
+    </div>
+  </div>
+
+  <!-- Progress (hidden by default) -->
+  <div class="progress-section hidden" id="progress-section">
+    <div class="progress-stage" id="progress-stage">Starting...</div>
+    <div class="progress-detail" id="progress-detail"></div>
+    <div class="progress-bar-track">
+      <div class="progress-bar-fill indeterminate" id="progress-bar"></div>
+    </div>
+    <div class="error-message hidden" id="error-message"></div>
+  </div>
+
+  <!-- Results (hidden by default) -->
+  <div id="results-section" class="hidden">
+
+    <!-- Stats -->
+    <div class="stats-grid" id="stats-grid"></div>
+
+    <!-- Run Health -->
+    <div class="health-panel hidden" id="health-panel"></div>
+
+    <!-- Executive Summary -->
+    <div class="summary-box hidden" id="summary-box">
+      <h2>Executive Summary</h2>
+      <div id="summary-text"></div>
+    </div>
+
+    <!-- Clusters -->
+    <div class="panel hidden" id="clusters-panel">
+      <h2 id="clusters-title">Failure Clusters</h2>
+      <table>
+        <thead>
+          <tr><th>#</th><th>Jobs</th><th>Severity</th><th>Type</th><th>Confidence</th><th>Root Cause</th></tr>
+        </thead>
+        <tbody id="clusters-body"></tbody>
+      </table>
+    </div>
+
+    <!-- Filter Toolbar -->
+    <div class="toolbar">
+      <input type="text" id="job-search" placeholder="Search jobs...">
+      <select id="sev-filter">
+        <option value="">All Severities</option>
+        <option value="critical">Critical</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+      <select id="type-filter">
+        <option value="">All Types</option>
+      </select>
+      <select id="sort-select">
+        <option value="severity">Sort: Severity</option>
+        <option value="confidence">Sort: Confidence</option>
+        <option value="job-id">Sort: Job ID</option>
+      </select>
+      <span class="count" id="visible-count"></span>
+      <span class="spacer"></span>
+      <button class="btn" id="export-json">Export JSON</button>
+      <button class="btn" id="export-csv">Export CSV</button>
+    </div>
+
+    <!-- Job Cards -->
+    <div id="job-cards"></div>
+  </div>
+
+  <footer>
+    Generated by <strong>CephSight</strong> &mdash; AI-Powered Teuthology CI Failure Analyzer
+  </footer>
+</div>
+
+<script>
+(function() {
+  var API_BASE = window.location.origin;
+
+  var urlInput     = document.getElementById('url-input');
+  var modelSelect  = document.getElementById('model-select');
+  var analyzeBtn   = document.getElementById('analyze-btn');
+  var progressSec  = document.getElementById('progress-section');
+  var progressStage= document.getElementById('progress-stage');
+  var progressDetail= document.getElementById('progress-detail');
+  var progressBar  = document.getElementById('progress-bar');
+  var errorMsg     = document.getElementById('error-message');
+  var resultsSec   = document.getElementById('results-section');
+  var statsGrid    = document.getElementById('stats-grid');
+  var healthPanel  = document.getElementById('health-panel');
+  var summaryBox   = document.getElementById('summary-box');
+  var summaryText  = document.getElementById('summary-text');
+  var clustersPanel= document.getElementById('clusters-panel');
+  var clustersTitle= document.getElementById('clusters-title');
+  var clustersBody = document.getElementById('clusters-body');
+  var jobCards     = document.getElementById('job-cards');
+  var searchInput  = document.getElementById('job-search');
+  var sevFilter    = document.getElementById('sev-filter');
+  var typeFilter   = document.getElementById('type-filter');
+  var sortSelect   = document.getElementById('sort-select');
+  var visibleCount = document.getElementById('visible-count');
+  var themeBtn     = document.getElementById('theme-toggle');
+  var exportJsonBtn= document.getElementById('export-json');
+  var exportCsvBtn = document.getElementById('export-csv');
+
+  var currentData = null;
+  var SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
+  var SEV_COLORS = { critical: '#f85149', high: '#d29922', medium: '#e3b341', low: '#3fb950' };
+
+  themeBtn.addEventListener('click', function() {
+    document.documentElement.classList.toggle('light');
+    themeBtn.textContent = document.documentElement.classList.contains('light') ? 'Dark Mode' : 'Light Mode';
+  });
+
+  analyzeBtn.addEventListener('click', startAnalysis);
+  urlInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') startAnalysis(); });
+
+  function startAnalysis() {
+    var url = urlInput.value.trim();
+    if (!url) { urlInput.focus(); return; }
+    var model = modelSelect.value;
+
+    analyzeBtn.disabled = true;
+    progressSec.classList.remove('hidden');
+    resultsSec.classList.add('hidden');
+    errorMsg.classList.add('hidden');
+    progressStage.textContent = 'Submitting...';
+    progressDetail.textContent = '';
+    progressBar.className = 'progress-bar-fill indeterminate';
+
+    fetch(API_BASE + '/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url, model: model })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.error) {
+        showError(data.error);
+        return;
+      }
+      pollStatus(data.task_id);
+    })
+    .catch(function(err) { showError('Failed to connect to backend: ' + err.message); });
+  }
+
+  function pollStatus(taskId) {
+    var interval = setInterval(function() {
+      fetch(API_BASE + '/api/status/' + taskId)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        progressStage.textContent = data.stage || data.status;
+        progressDetail.textContent = data.progress || '';
+
+        if (data.status === 'complete') {
+          clearInterval(interval);
+          fetchResults(taskId);
+        } else if (data.status === 'failed') {
+          clearInterval(interval);
+          showError(data.error || 'Analysis failed');
+        }
+      })
+      .catch(function(err) {
+        clearInterval(interval);
+        showError('Lost connection to backend');
+      });
+    }, 2000);
+  }
+
+  function fetchResults(taskId) {
+    fetch(API_BASE + '/api/results/' + taskId)
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      currentData = data;
+      progressSec.classList.add('hidden');
+      analyzeBtn.disabled = false;
+      renderResults(data);
+    })
+    .catch(function(err) { showError('Failed to load results: ' + err.message); });
+  }
+
+  function showError(msg) {
+    errorMsg.textContent = msg;
+    errorMsg.classList.remove('hidden');
+    progressBar.className = 'progress-bar-fill';
+    progressBar.style.width = '100%';
+    progressBar.style.background = 'var(--red)';
+    analyzeBtn.disabled = false;
+  }
+
+  function esc(text) {
+    var div = document.createElement('div');
+    div.textContent = text || '';
+    return div.innerHTML;
+  }
+
+  function renderResults(data) {
+    resultsSec.classList.remove('hidden');
+
+    var analyses = data.analyses || [];
+    var bySev = {};
+    var byType = {};
+    analyses.forEach(function(a) {
+      var s = (a.severity || 'unknown').toLowerCase();
+      bySev[s] = (bySev[s] || 0) + 1;
+      var t = a.failure_type || 'unknown';
+      byType[t] = (byType[t] || 0) + 1;
+    });
+
+    // Stats
+    var statsHtml = '';
+    statsHtml += '<div class="stat-card"><div class="value">' + (data.total_jobs || 0) + '</div><div class="label">Total Jobs</div></div>';
+    statsHtml += '<div class="stat-card"><div class="value">' + (data.failed_jobs || 0) + '</div><div class="label">Failed Jobs</div></div>';
+    statsHtml += '<div class="stat-card"><div class="value">' + (data.fetched_ok || 0) + '</div><div class="label">Logs Fetched</div></div>';
+    statsHtml += '<div class="stat-card"><div class="value">' + ((data.clusters || []).length) + '</div><div class="label">Clusters</div></div>';
+    ['critical','high','medium','low'].forEach(function(s) {
+      if (bySev[s]) {
+        statsHtml += '<div class="stat-card ' + s + '"><div class="value">' + bySev[s] + '</div><div class="label">' + s.toUpperCase() + '</div></div>';
+      }
+    });
+    statsGrid.innerHTML = statsHtml;
+
+    // Health
+    if (data.run_health) {
+      var rh = data.run_health;
+      healthPanel.classList.remove('hidden');
+      healthPanel.innerHTML =
+        '<span class="health-badge ' + esc(rh.classification) + '">' + esc(rh.classification.replace(/_/g,' ')) + '</span>' +
+        '<span class="health-ratio" style="color:' + (rh.classification === 'isolated' ? 'var(--green)' : rh.classification === 'mass_failure' ? 'var(--red)' : 'var(--orange)') + '">' + esc(rh.pct) + '</span>' +
+        '<span class="health-detail">failure ratio (' + rh.failed_jobs + '/' + rh.total_jobs + ' jobs)</span>';
+    }
+
+    // Summary
+    if (data.executive_summary) {
+      summaryBox.classList.remove('hidden');
+      summaryText.textContent = data.executive_summary;
+    }
+
+    // Clusters
+    var clusters = data.clusters || [];
+    if (clusters.length) {
+      clustersPanel.classList.remove('hidden');
+      clustersTitle.textContent = 'Failure Clusters (' + clusters.length + ' patterns)';
+      var clusterHtml = '';
+      clusters.forEach(function(c, i) {
+        clusterHtml += '<tr>' +
+          '<td>' + (i + 1) + '</td>' +
+          '<td><strong>' + (c.size || c.job_ids.length) + '</strong></td>' +
+          '<td><span class="severity-badge ' + (c.severity || '').toLowerCase() + '">' + esc((c.severity || '?').toUpperCase()) + '</span></td>' +
+          '<td>' + esc(c.failure_type || '-') + '</td>' +
+          '<td>' + (c.confidence ? Math.round(c.confidence * 100) + '%' : '-') + '</td>' +
+          '<td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(c.root_cause || c.signature || '') + '</td>' +
+          '</tr>';
+      });
+      clustersBody.innerHTML = clusterHtml;
+    }
+
+    // Type filter dropdown
+    typeFilter.innerHTML = '<option value="">All Types</option>';
+    Object.keys(byType).sort().forEach(function(t) {
+      var opt = document.createElement('option');
+      opt.value = t; opt.textContent = t;
+      typeFilter.appendChild(opt);
+    });
+
+    // Sort analyses
+    analyses.sort(function(a, b) {
+      return (SEV_ORDER[(a.severity||'').toLowerCase()] || 9) - (SEV_ORDER[(b.severity||'').toLowerCase()] || 9);
+    });
+
+    // Render job cards
+    jobCards.innerHTML = '';
+    analyses.forEach(function(a) {
+      var card = document.createElement('div');
+      card.className = 'job-card';
+      card.setAttribute('data-job-id', a.job_id || '');
+      card.setAttribute('data-severity', (a.severity || '').toLowerCase());
+      card.setAttribute('data-failure-type', a.failure_type || '');
+      card.setAttribute('data-confidence', a.confidence || 0);
+
+      var sev = (a.severity || 'unknown').toLowerCase();
+      if (sev === 'critical' || sev === 'high') card.classList.add('open');
+
+      var confPct = Math.round((a.confidence || 0) * 100);
+      var confColor = confPct >= 75 ? 'var(--green)' : confPct >= 50 ? 'var(--yellow)' : 'var(--red)';
+
+      card.innerHTML =
+        '<div class="job-card-header">' +
+          '<span class="arrow">&#9654;</span>' +
+          '<span class="severity-badge ' + sev + '">' + esc(sev.toUpperCase()) + '</span>' +
+          '<span class="job-card-title">Job ' + esc(a.job_id) + ' &mdash; ' + esc(a.error_category || '') + '</span>' +
+          '<div class="job-card-meta">' +
+            '<span class="tag">' + esc(a.failure_type || 'unknown') + '</span>' +
+            '<span style="color:' + confColor + ';font-weight:600;">' + confPct + '%</span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="job-card-body">' +
+          '<div class="field-label">Root Cause</div>' +
+          '<div>' + esc(a.root_cause || '') + '</div>' +
+          (a.recommended_action ? '<div class="field-label">Recommended Action</div><div class="highlight-box">' + esc(a.recommended_action) + '</div>' : '') +
+          (a.explanation ? '<div class="field-label">Explanation</div><div style="font-size:0.9rem;">' + esc(a.explanation) + '</div>' : '') +
+          (a.fix_suggestions && a.fix_suggestions.length ? '<div class="field-label">Fix Suggestions</div><ul class="fix-list">' + a.fix_suggestions.map(function(s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ul>' : '') +
+          (a.affected_components && a.affected_components.length ? '<div class="field-label">Affected Components</div><div>' + a.affected_components.map(function(c) { return '<span class="tag">' + esc(c) + '</span>'; }).join('') + '</div>' : '') +
+        '</div>';
+
+      card.querySelector('.job-card-header').addEventListener('click', function() {
+        card.classList.toggle('open');
+      });
+
+      jobCards.appendChild(card);
+    });
+
+    updateVisibleCount();
+  }
+
+  function getJobCards() {
+    return Array.from(jobCards.querySelectorAll('.job-card'));
+  }
+
+  function applyFilters() {
+    var query = (searchInput.value || '').toLowerCase();
+    var sev = sevFilter.value;
+    var ftype = typeFilter.value;
+    var cards = getJobCards();
+    cards.forEach(function(card) {
+      var show = true;
+      if (query && card.textContent.toLowerCase().indexOf(query) === -1) show = false;
+      if (sev && card.getAttribute('data-severity') !== sev) show = false;
+      if (ftype && card.getAttribute('data-failure-type') !== ftype) show = false;
+      card.classList.toggle('hidden', !show);
+    });
+    updateVisibleCount();
+  }
+
+  function applySort() {
+    var cards = getJobCards();
+    var order = sortSelect.value;
+    cards.sort(function(a, b) {
+      if (order === 'severity') {
+        return (SEV_ORDER[a.getAttribute('data-severity')] || 9) - (SEV_ORDER[b.getAttribute('data-severity')] || 9);
+      } else if (order === 'confidence') {
+        return parseFloat(b.getAttribute('data-confidence') || 0) - parseFloat(a.getAttribute('data-confidence') || 0);
+      } else {
+        return (a.getAttribute('data-job-id') || '').localeCompare(b.getAttribute('data-job-id') || '', undefined, { numeric: true });
+      }
+    });
+    cards.forEach(function(c) { jobCards.appendChild(c); });
+  }
+
+  function updateVisibleCount() {
+    var total = getJobCards().length;
+    var visible = getJobCards().filter(function(c) { return !c.classList.contains('hidden'); }).length;
+    visibleCount.textContent = visible + ' of ' + total + ' jobs shown';
+  }
+
+  searchInput.addEventListener('input', applyFilters);
+  sevFilter.addEventListener('change', applyFilters);
+  typeFilter.addEventListener('change', applyFilters);
+  sortSelect.addEventListener('change', function() { applySort(); applyFilters(); });
+
+  exportJsonBtn.addEventListener('click', function() {
+    if (!currentData) return;
+    var blob = new Blob([JSON.stringify(currentData, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = 'cephsight_report.json';
+    a.click(); URL.revokeObjectURL(url);
+  });
+
+  exportCsvBtn.addEventListener('click', function() {
+    if (!currentData || !currentData.analyses) return;
+    var rows = [['job_id','severity','failure_type','confidence','error_category','root_cause','recommended_action']];
+    currentData.analyses.forEach(function(a) {
+      rows.push([
+        a.job_id, a.severity, a.failure_type,
+        Math.round((a.confidence || 0) * 100) + '%',
+        '"' + (a.error_category || '').replace(/"/g, '""') + '"',
+        '"' + (a.root_cause || '').replace(/"/g, '""') + '"',
+        '"' + (a.recommended_action || '').replace(/"/g, '""') + '"'
+      ]);
+    });
+    var csv = rows.map(function(r) { return r.join(','); }).join('\n');
+    var blob = new Blob([csv], { type: 'text/csv' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = 'cephsight_report.csv';
+    a.click(); URL.revokeObjectURL(url);
+  });
+
+})();
+</script>
+</body>
+</html>

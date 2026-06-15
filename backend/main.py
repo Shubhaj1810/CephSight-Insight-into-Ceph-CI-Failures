@@ -91,8 +91,8 @@ Examples:
     )
     ap.add_argument(
         "--model",
-        default="llama3:8b",
-        help="Ollama model name (default: llama3:8b).",
+        default="cephsight",
+        help="Ollama model name (default: cephsight — qwen3.5:14b with 32k context).",
     )
     ap.add_argument(
         "--ollama-url",

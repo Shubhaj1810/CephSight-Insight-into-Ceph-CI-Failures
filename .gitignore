@@ -4,3 +4,6 @@ output/
 .analysis_cache/
 .pytest_cache/
 *.log
+logsample.txt
+*.html
+!frontend/index.html
